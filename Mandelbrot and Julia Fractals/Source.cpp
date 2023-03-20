@@ -12,7 +12,7 @@ long double map(long double value, long double start1, long double stop1, long d
 
 class Fractal {
 private:
-	sf::Vector2f origin;
+	sf::Vector2f movedConstant;
 
 	int maxIterations;
 	int width;
@@ -37,8 +37,8 @@ public:
 
 public:
 	
-	Fractal(sf::Vector2f origin, int maxIterations, int width, int height) 
-		: origin(origin), maxIterations(maxIterations), width(width), height(height) {
+	Fractal(sf::Vector2f movedConstant, int maxIterations, int width, int height)
+		: movedConstant(movedConstant), maxIterations(maxIterations), width(width), height(height) {
 		init_color_mapping();
 	}
 	
@@ -61,18 +61,19 @@ public:
 		mapping.push_back(sf::Color(106, 52, 3));     // index 15		
 	}
 
-	void drawParallel(sf::RenderTarget& target) {
+	// Draws the set of all values of c, that do not diverge when iterated from a given point z0
+	void drawBrot(sf::RenderTarget& target) {
 		image.create(width, height, sf::Color::Black);
-		
-		const long double xOrigin = origin.x;
-		const long double yOrigin = origin.y;
-		
+
+		const long double xOrigin = movedConstant.x;
+		const long double yOrigin = movedConstant.y;
+
 		const long double xMin = (stdXMin + xOff) / zoom;
 		const long double xMax = (stdXMax + xOff) / zoom;
 		const long double yMin = (stdYMin + yOff) / zoom;
 		const long double yMax = (stdYMax + yOff) / zoom;
-		
-		#pragma omp parallel for collapse(2) 
+
+#pragma omp parallel for collapse(2) 
 		for (int x = 0; x < width; ++x) {
 			long double cX = map(x, 0, width, xMin, xMax);
 			for (int y = 0; y < height; ++y) {
@@ -113,6 +114,56 @@ public:
 		target.draw(sprite);
 	}
 
+	// Draws all the values of z that do not diverge when iterated from, when c is a given constant
+	void drawJulia(sf::RenderTarget& target) {
+		image.create(width, height, sf::Color::Black);
+
+		const long double xMin = (stdXMin + xOff) / zoom;
+		const long double xMax = (stdXMax + xOff) / zoom;
+		const long double yMin = (stdYMin + yOff) / zoom;
+		const long double yMax = (stdYMax + yOff) / zoom;
+
+		const long double cX = movedConstant.x;
+		const long double cY = movedConstant.y;
+		
+#pragma omp parallel for collapse(2)
+		for (int x = 0; x < width; ++x) {
+			for (int y = 0; y < height; ++y) {
+				long double zX = map(x, 0, width, xMin, xMax);
+				long double zY = map(y, 0, height, yMin, yMax);
+
+				int n = 0;
+
+				long double nzX;
+				long double nzY;
+
+				while (n < maxIterations) {
+					//Square the complex number
+					nzX = zX * zX - zY * zY + cX;
+					nzY = 2 * zX * zY + cY;
+
+					zX = nzX;
+					zY = nzY;
+
+					if (zX * zX + zY * zY > 4) {
+						break;
+					}
+
+					++n;
+				}
+
+				if (n < maxIterations && n > 0) {
+					int id = n % mapping.size();
+					image.setPixel(x, y, mapping[id]);
+				}
+			}
+		}
+
+		texture.loadFromImage(image);
+		sprite.setTexture(texture);
+		target.draw(sprite);
+	}
+	
 	void setOffset(long double xOff, long double yOff) {
 		this->xOff = xOff;
 		this->yOff = yOff;
@@ -122,8 +173,8 @@ public:
 		this->zoom = zoom;
 	}
 
-	void setOrigin(sf::Vector2f origin) {
-		this->origin = origin;
+	void setmovedConstant(sf::Vector2f movedConstant) {
+		this->movedConstant = movedConstant;
 	}
 	
 };
@@ -131,32 +182,6 @@ const long double Fractal::stdYMin = -1.13;
 const long double Fractal::stdYMax = 1.13;
 const long double Fractal::stdXMin = Fractal::stdYMin * 16 / 9 - .5;
 const long double Fractal::stdXMax = Fractal::stdYMax * 16 / 9 - .5;
-
-	
-void renderHighRes() {
-
-	int maxIterations = 5000;
-
-	//16k
-	int width = 15360;
-	int height = 8640;
-	
-	sf::CircleShape origin(5);
-	origin.setFillColor(sf::Color::Red);
-	origin.setOrigin(5, 5);
-	origin.setPosition(width / 2, height / 2);
-
-	Fractal fractal(origin.getPosition(), maxIterations, width, height);
-	
-	sf::RenderTexture renderTexture;
-	
-	renderTexture.create(width, height);
-	
-	renderTexture.clear(sf::Color::Black);
-	fractal.drawParallel(renderTexture);
-	
-	renderTexture.getTexture().copyToImage().saveToFile("mandelbrot.png");
-}
 
 int main() {
 	
@@ -167,13 +192,9 @@ int main() {
 	window.setFramerateLimit(60);
 
 	sf::Vector2f originPos(0, 0);
-	sf::Vector2f r1i0Pos(1, 0);
-	sf::Vector2f r0i1Pos(0, 1);
 	
 	int maxIterations = 256;
-
-	sf::Vector2i prevMousePos = sf::Mouse::getPosition(window);
-
+	
 	Fractal fractal(originPos, maxIterations, width, height);
 
 	sf::CircleShape origin(8);
@@ -181,15 +202,7 @@ int main() {
 	origin.setOrigin(8, 8);
 	origin.setPosition(float(map(originPos.x, fractal.stdXMin, fractal.stdXMax, 0, width)), float(map(originPos.y, fractal.stdYMin, fractal.stdYMax, 0, height)));
 
-	sf::CircleShape r1i0(3);
-	r1i0.setFillColor(sf::Color::Green);
-	r1i0.setOrigin(3, 3);
-	r1i0.setPosition(float(map(r1i0Pos.x, fractal.stdXMin, fractal.stdXMax, 0, width)), float(-map(r1i0Pos.y, fractal.stdYMin, fractal.stdYMax, 0, height)));
-	
-	sf::CircleShape r0i1(3);
-	r0i1.setFillColor(sf::Color::Blue);
-	r0i1.setOrigin(3, 3);
-	r0i1.setPosition(float(map(r0i1Pos.x, fractal.stdXMin, fractal.stdXMax, 0, width)), float(-map(r0i1Pos.y, fractal.stdYMin, fractal.stdYMax, 0, height)));
+	bool isDragging = false;
 
 	while (window.isOpen()) {
 
@@ -198,46 +211,41 @@ int main() {
 			if (event.type == sf::Event::Closed)
 				window.close();
 
-			if (event.type == sf::Event::MouseWheelScrolled) {
-
-				const long double zoomFactor = 1 + event.mouseWheelScroll.delta * .1;
-
-				fractal.setZoom(fractal.zoom * zoomFactor);
+			if (event.type == sf::Event::MouseButtonPressed) {
+				if (event.mouseButton.button == sf::Mouse::Left) {
+					isDragging = true;
+				}
 			}
-		}
 
-		
-		if (sf::Mouse::isButtonPressed(sf::Mouse::Left) && window.hasFocus() && !origin.getGlobalBounds().contains(prevMousePos.x, prevMousePos.y)) {
-			sf::Vector2i mousePos = sf::Mouse::getPosition(window);
-			sf::Vector2i delta = prevMousePos - mousePos;
+			if (event.type == sf::Event::MouseButtonReleased) {
+				if (event.mouseButton.button == sf::Mouse::Left) {
+					isDragging = false;
+				}
+			}
 
-			long double px2coord = (fractal.stdXMax - fractal.stdXMin) / width;
-		
-			long double xOff = delta.x * px2coord;
-			long double yOff = delta.y * px2coord;
-			
-			fractal.setOffset(fractal.xOff + xOff, fractal.yOff + yOff);
-			
-			origin.setPosition(origin.getPosition().x - delta.x, origin.getPosition().y - delta.y);
-			
+			if (event.type == sf::Event::MouseWheelScrolled) {
+				if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+					float z = 1 + event.mouseWheelScroll.delta * 0.1;
+					fractal.setZoom(fractal.zoom * z);
+				}
+			}
 			
 		}
-		else if (sf::Mouse::isButtonPressed(sf::Mouse::Left) && window.hasFocus()) {
+		
+
+		if (isDragging) {
 			originPos = sf::Vector2f(map(sf::Mouse::getPosition(window).x, 0, width, fractal.stdXMin, fractal.stdXMax), -map(sf::Mouse::getPosition(window).y, 0, height, fractal.stdYMin, fractal.stdYMax));
 			//Apply origin offset
 			originPos.x += fractal.xOff;
 			originPos.y += fractal.yOff;
 			origin.setPosition(sf::Mouse::getPosition(window).x, sf::Mouse::getPosition(window).y);
-			fractal.setOrigin(originPos);
+			fractal.setmovedConstant(originPos);
 		}
-		prevMousePos = sf::Mouse::getPosition(window);
 
 		window.clear();
 
-		fractal.drawParallel(window);
+		fractal.drawJulia(window);
 		window.draw(origin);
-		window.draw(r1i0);
-		window.draw(r0i1);
 		
 		window.display();
 	}
